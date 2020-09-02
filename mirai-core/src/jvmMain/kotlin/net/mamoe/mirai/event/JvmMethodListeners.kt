@@ -1,18 +1,20 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
 
+@file:JvmMultifileClass
 @file:JvmName("Events")
 @file:Suppress("unused", "INVISIBLE_MEMBER", "INVISIBLE_REFERENCE", "NOTHING_TO_INLINE")
 
 package net.mamoe.mirai.event
 
 import kotlinx.coroutines.*
+import net.mamoe.mirai.event.internal.registerEvent
 import java.lang.reflect.Method
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -37,18 +39,26 @@ import kotlin.reflect.jvm.kotlinFunction
  *
  * 支持的函数类型:
  * ```
+ * // 所有函数参数, 函数返回值都不允许标记为可空 (带有 '?' 符号)
+ * // T 表示任何 Event 类型.
  * suspend fun T.onEvent(T)
  * suspend fun T.onEvent(T): ListeningStatus
+ * suspend fun T.onEvent(T): Nothing
  * suspend fun onEvent(T)
  * suspend fun onEvent(T): ListeningStatus
+ * suspend fun onEvent(T): Nothing
  * suspend fun T.onEvent()
  * suspend fun T.onEvent(): ListeningStatus
+ * suspend fun T.onEvent(): Nothing
  * fun T.onEvent(T)
  * fun T.onEvent(T): ListeningStatus
+ * fun T.onEvent(T): Nothing
  * fun onEvent(T)
  * fun onEvent(T): ListeningStatus
+ * fun onEvent(T): Nothing
  * fun T.onEvent()
  * fun T.onEvent(): ListeningStatus
+ * fun T.onEvent(): Nothing
  * ```
  *
  * Kotlin 使用示例:
@@ -57,6 +67,8 @@ import kotlin.reflect.jvm.kotlinFunction
  * object MyEvents : ListenerHost {
  *     override val coroutineContext = SupervisorJob()
  *
+ *
+ *     // 可以抛出任何异常, 将在 this.coroutineContext 或 registerEvents 时提供的 CoroutineScope.coroutineContext 中的 CoroutineExceptionHandler 处理.
  *     @EventHandler
  *     suspend fun MessageEvent.onMessage() {
  *         reply("received")
@@ -76,8 +88,17 @@ import kotlin.reflect.jvm.kotlinFunction
  *     }
  *
  *     @EventHandler
- *     suspend fun MessageEvent.onMessage() {
+ *     suspend fun MessageEvent.onMessage() { // 可以抛出任何异常, 将在 handleException 处理
  *         reply("received")
+ *         // 无返回值 (或者返回 Unit), 表示一直监听事件.
+ *     }
+ *
+ *     @EventHandler
+ *     suspend fun MessageEvent.onMessage(): ListeningStatus { // 可以抛出任何异常, 将在 handleException 处理
+ *         reply("received")
+ *
+ *         return ListeningStatus.LISTENING // 表示继续监听事件
+ *         // return ListeningStatus.STOPPED // 表示停止监听事件
  *     }
  * }
  *
@@ -90,8 +111,10 @@ import kotlin.reflect.jvm.kotlinFunction
  *
  * 支持的方法类型
  * ```
+ * // T 表示任何 Event 类型.
  * void onEvent(T)
- * ListeningStatus onEvent(T)
+ * Void onEvent(T)
+ * @NotNull ListeningStatus onEvent(T) // 返回 null 时将抛出异常
  * ```
  *
  *
@@ -99,40 +122,50 @@ import kotlin.reflect.jvm.kotlinFunction
  * ```
  * public class MyEventHandlers extends SimpleListenerHost {
  *     @Override
- *     public void handleException(CoroutineContext context, Throwable exception){
+ *     public void handleException(@NotNull CoroutineContext context, @NotNull Throwable exception){
  *         // 处理事件处理时抛出的异常
  *     }
  *
  *     @EventHandler
- *     public void onMessage(MessageEvent event) throws Exception {
- *         event.subject.sendMessage("received")
+ *     public void onMessage(@NotNull MessageEvent event) throws Exception { // 可以抛出任何异常, 将在 handleException 处理
+ *         event.subject.sendMessage("received");
+ *         // 无返回值, 表示一直监听事件.
+ *     }
+ *
+ *     @NotNull
+ *     @EventHandler
+ *     public ListeningStatus onMessage(@NotNull MessageEvent event) throws Exception { // 可以抛出任何异常, 将在 handleException 处理
+ *         event.subject.sendMessage("received");
+ *
+ *         return ListeningStatus.LISTENING; // 表示继续监听事件
+ *         // return ListeningStatus.STOPPED; // 表示停止监听事件
  *     }
  * }
  *
  * Events.registerEvents(new MyEventHandlers())
  * ```
  *
- * @sample net.mamoe.mirai.event.JvmMethodEventsTest
+ * //@sample net.mamoe.mirai.event.JvmMethodEventsTest
  */
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.RUNTIME)
-annotation class EventHandler(
+public annotation class EventHandler(
     /**
      * 监听器优先级
      * @see Listener.EventPriority 查看优先级相关信息
      * @see Event.intercept 拦截事件
      */
-    val priority: Listener.EventPriority = EventPriority.NORMAL,
+    public val priority: Listener.EventPriority = EventPriority.NORMAL,
     /**
      * 是否自动忽略被 [取消][CancellableEvent.isCancelled]
      * @see CancellableEvent
      */
-    val ignoreCancelled: Boolean = true,
+    public val ignoreCancelled: Boolean = true,
     /**
      * 并发类型
      * @see Listener.ConcurrencyKind
      */
-    val concurrency: Listener.ConcurrencyKind = Listener.ConcurrencyKind.CONCURRENT
+    public val concurrency: Listener.ConcurrencyKind = Listener.ConcurrencyKind.CONCURRENT
 )
 
 /**
@@ -141,23 +174,23 @@ annotation class EventHandler(
  * @see SimpleListenerHost 简单的实现
  * @see EventHandler 查看更多信息
  */
-interface ListenerHost
+public interface ListenerHost
 
 /**
  * 携带一个异常处理器的 [ListenerHost].
  * @see ListenerHost 查看更多信息
  * @see EventHandler 查看更多信息
  */
-abstract class SimpleListenerHost
+public abstract class SimpleListenerHost
 @JvmOverloads constructor(coroutineContext: CoroutineContext = EmptyCoroutineContext) : ListenerHost, CoroutineScope {
 
-    final override val coroutineContext: CoroutineContext =
-        SupervisorJob(coroutineContext[Job]) + CoroutineExceptionHandler(::handleException) + coroutineContext
+    public final override val coroutineContext: CoroutineContext =
+        CoroutineExceptionHandler(::handleException) + coroutineContext + SupervisorJob(coroutineContext[Job])
 
     /**
      * 处理事件处理中未捕获的异常. 在构造器中的 [coroutineContext] 未提供 [CoroutineExceptionHandler] 情况下必须继承此函数.
      */
-    open fun handleException(context: CoroutineContext, exception: Throwable) {
+    public open fun handleException(context: CoroutineContext, exception: Throwable) {
         throw IllegalStateException(
             """
             未找到异常处理器. 请继承 SimpleListenerHost 中的 handleException 方法, 或在构造 SimpleListenerHost 时提供 CoroutineExceptionHandler
@@ -171,7 +204,7 @@ abstract class SimpleListenerHost
     /**
      * 停止所有事件监听
      */
-    fun cancelAll() {
+    public fun cancelAll() {
         this.cancel()
     }
 }
@@ -184,7 +217,7 @@ abstract class SimpleListenerHost
  * @see EventHandler 获取更多信息
  */
 @JvmOverloads
-fun <T> T.registerEvents(coroutineContext: CoroutineContext = EmptyCoroutineContext)
+public fun <T> T.registerEvents(coroutineContext: CoroutineContext = EmptyCoroutineContext): Unit
         where T : CoroutineScope, T : ListenerHost = this.registerEvents(this, coroutineContext)
 
 /**
@@ -195,7 +228,10 @@ fun <T> T.registerEvents(coroutineContext: CoroutineContext = EmptyCoroutineCont
  * @see EventHandler 获取更多信息
  */
 @JvmOverloads
-fun CoroutineScope.registerEvents(host: ListenerHost, coroutineContext: CoroutineContext = EmptyCoroutineContext) {
+public fun CoroutineScope.registerEvents(
+    host: ListenerHost,
+    coroutineContext: CoroutineContext = EmptyCoroutineContext
+) {
     for (method in host.javaClass.declaredMethods) {
         method.getAnnotation(EventHandler::class.java)?.let {
             method.registerEvent(host, this, it, coroutineContext)
@@ -260,6 +296,12 @@ private fun Method.registerEvent(
                 return ListeningStatus.STOPPED
             }
         }
+        require(!kotlinFunction.returnType.isMarkedNullable) {
+            "Kotlin event handlers cannot have nullable return type."
+        }
+        require(kotlinFunction.parameters.any { it.type.isMarkedNullable }) {
+            "Kotlin event handlers cannot have nullable parameter type."
+        }
         when (kotlinFunction.returnType.classifier) {
             Unit::class, Nothing::class -> {
                 scope.subscribeAlways(
@@ -299,7 +341,7 @@ private fun Method.registerEvent(
             "Illegal method parameter. Required one exact Event subclass. found $paramType"
         }
         when (this.returnType) {
-            Void::class.java, Void.TYPE -> {
+            Void::class.java, Void.TYPE, Nothing::class.java -> {
                 scope.subscribeAlways(
                     paramType.kotlin as KClass<out Event>,
                     priority = annotation.priority,

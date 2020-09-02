@@ -1,8 +1,8 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
@@ -148,7 +148,7 @@ internal class StatSvc {
                                 var44.strVendorName = ROMUtil.getRomName();
                                 var44.strVendorOSName = ROMUtil.getRomVersion(20);
                                 */
-                                bytes_0x769_reqbody = ProtoBuf.dump(
+                                bytes_0x769_reqbody = ProtoBuf.encodeToByteArray(
                                     Oidb0x769.RequestBody.serializer(), Oidb0x769.RequestBody(
                                         rpt_config_list = listOf(
                                             Oidb0x769.ConfigSeq(
@@ -182,7 +182,7 @@ internal class StatSvc {
     }
 
     internal object ReqMSFOffline :
-        IncomingPacketFactory<BotOfflineEvent.Dropped>("StatSvc.ReqMSFOffline", "StatSvc.RspMSFForceOffline") {
+        IncomingPacketFactory<BotOfflineEvent.MsfOffline>("StatSvc.ReqMSFOffline", "StatSvc.RspMSFForceOffline") {
 
         internal data class MsfOfflineToken(
             val uin: Long,
@@ -190,13 +190,13 @@ internal class StatSvc {
             val const: Byte
         ) : Packet, RuntimeException("dropped by StatSvc.ReqMSFOffline")
 
-        override suspend fun ByteReadPacket.decode(bot: QQAndroidBot, sequenceId: Int): BotOfflineEvent.Dropped {
+        override suspend fun ByteReadPacket.decode(bot: QQAndroidBot, sequenceId: Int): BotOfflineEvent.MsfOffline {
             val decodeUniPacket = readUniPacket(RequestMSFForceOffline.serializer())
             @Suppress("INVISIBLE_MEMBER")
-            return BotOfflineEvent.Dropped(bot, MsfOfflineToken(decodeUniPacket.uin, decodeUniPacket.iSeqno, 0))
+            return BotOfflineEvent.MsfOffline(bot, MsfOfflineToken(decodeUniPacket.uin, decodeUniPacket.iSeqno, 0))
         }
 
-        override suspend fun QQAndroidBot.handle(packet: BotOfflineEvent.Dropped, sequenceId: Int): OutgoingPacket? {
+        override suspend fun QQAndroidBot.handle(packet: BotOfflineEvent.MsfOffline, sequenceId: Int): OutgoingPacket? {
             val cause = packet.cause
             check(cause is MsfOfflineToken) { "internal error: handling $packet in StatSvc.ReqMSFOffline" }
             return buildResponseUniPacket(client) {

@@ -1,8 +1,8 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
@@ -13,10 +13,10 @@ package upload
 
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.features.HttpTimeout
-import io.ktor.client.request.put
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.features.*
+import io.ktor.client.request.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -74,7 +74,7 @@ object GitHub {
     fun upload(file: File, project: Project, repo: String, targetFilePath: String) = runBlocking {
         val token = getGithubToken(project)
         println("token.length=${token.length}")
-        val url = "https://api.github.com/repos/mamoe/$repo/contents/$targetFilePath"
+        val url = "https://api.github.com/repos/project-mirai/$repo/contents/$targetFilePath"
         retryCatching(100, onFailure = { delay(30_000) }) { // 403 forbidden?
             Http.put<String>("$url?access_token=$token") {
                 val sha = retryCatching(3, onFailure = { delay(30_000) }) {
@@ -89,7 +89,7 @@ object GitHub {
                 val content = String(Base64.getEncoder().encode(file.readBytes()))
                 body = """
                     {
-                      "message": "automatically upload on release",
+                      "message": "Automatically upload on release ${project.name}:${project.version}",
                       "content": "$content"
                       ${if (sha == null) "" else """, "sha": "$sha" """}
                     }
@@ -121,7 +121,7 @@ object GitHub {
             return withContext(Dispatchers.IO) {
                 val response = Jsoup
                     .connect(
-                        "https://api.github.com/repos/mamoe/$repo/contents/$filePath?access_token=" + getGithubToken(
+                        "https://api.github.com/repos/project-mirai/$repo/contents/$filePath?access_token=" + getGithubToken(
                             project
                         )
                     )
@@ -150,7 +150,7 @@ object GitHub {
             val resp = withContext(Dispatchers.IO) {
                 Jsoup
                     .connect(
-                        "https://api.github.com/repos/mamoe/$repo/git/ref/heads/$branch?access_token=" + getGithubToken(
+                        "https://api.github.com/repos/project-mirai/$repo/git/ref/heads/$branch?access_token=" + getGithubToken(
                             project
                         )
                     )

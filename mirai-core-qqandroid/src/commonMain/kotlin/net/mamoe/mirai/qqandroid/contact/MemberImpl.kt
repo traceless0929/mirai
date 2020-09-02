@@ -1,8 +1,8 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
@@ -180,7 +180,7 @@ internal class MemberImpl constructor(
         check(this.id != bot.id) {
             "A bot can't mute itself."
         }
-        checkBotPermissionHigherThanThis()
+        checkBotPermissionHigherThanThis("mute")
         bot.network.run {
             TroopManagement.Mute(
                 client = bot.client,
@@ -194,10 +194,10 @@ internal class MemberImpl constructor(
         net.mamoe.mirai.event.events.MemberMuteEvent(this@MemberImpl, durationSeconds, null).broadcast()
     }
 
-    private fun checkBotPermissionHigherThanThis() {
+    private fun checkBotPermissionHigherThanThis(operationName: String) {
         check(group.botPermission > this.permission) {
             throw PermissionDeniedException(
-                "`kick` operation requires bot to have a higher permission than the target member, " +
+                "`$operationName` operation requires bot to have a higher permission than the target member, " +
                         "but bot's is ${group.botPermission}, target's is ${this.permission}"
             )
         }
@@ -205,7 +205,7 @@ internal class MemberImpl constructor(
 
     @JvmSynthetic
     override suspend fun unmute() {
-        checkBotPermissionHigherThanThis()
+        checkBotPermissionHigherThanThis("unmute")
         bot.network.run {
             TroopManagement.Mute(
                 client = bot.client,
@@ -222,7 +222,7 @@ internal class MemberImpl constructor(
 
     @JvmSynthetic
     override suspend fun kick(message: String) {
-        checkBotPermissionHigherThanThis()
+        checkBotPermissionHigherThanThis("kick")
         check(group.members.getOrNull(this.id) != null) {
             "Member ${this.id} had already been kicked from group ${group.id}"
         }
@@ -237,7 +237,7 @@ internal class MemberImpl constructor(
 
             @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
             group.members.delegate.removeIf { it.id == this@MemberImpl.id }
-            this.cancel(CancellationException("Kicked by bot"))
+            this@MemberImpl.cancel(CancellationException("Kicked by bot"))
             MemberLeaveEvent.Kick(this@MemberImpl, null).broadcast()
         }
     }
@@ -259,7 +259,8 @@ internal class MemberInfoImpl(
 ) : MemberInfo {
     override val uin: Long = jceInfo.memberUin
     override val nameCard: String = jceInfo.sName ?: ""
-    override val nick: String = jceInfo.nick
+    internal var _nick: String = jceInfo.nick
+    override val nick: String get() = _nick
     override val permission: MemberPermission = when {
         jceInfo.memberUin == groupOwnerId -> MemberPermission.OWNER
         jceInfo.dwFlag == 1L -> MemberPermission.ADMINISTRATOR

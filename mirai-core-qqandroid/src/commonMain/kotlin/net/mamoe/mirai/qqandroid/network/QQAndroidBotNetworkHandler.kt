@@ -1,8 +1,8 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
@@ -24,6 +24,8 @@ import net.mamoe.mirai.event.events.BotOfflineEvent
 import net.mamoe.mirai.event.events.BotOnlineEvent
 import net.mamoe.mirai.event.events.BotReloginEvent
 import net.mamoe.mirai.message.MessageEvent
+import net.mamoe.mirai.network.ForceOfflineException
+import net.mamoe.mirai.network.RetryLaterException
 import net.mamoe.mirai.network.UnsupportedSMSLoginException
 import net.mamoe.mirai.network.WrongPasswordException
 import net.mamoe.mirai.qqandroid.QQAndroidBot
@@ -31,6 +33,7 @@ import net.mamoe.mirai.qqandroid.contact.*
 import net.mamoe.mirai.qqandroid.network.protocol.data.jce.StTroopNum
 import net.mamoe.mirai.qqandroid.network.protocol.data.proto.MsgSvc
 import net.mamoe.mirai.qqandroid.network.protocol.packet.*
+import net.mamoe.mirai.qqandroid.network.protocol.packet.KnownPacketFactories.PacketFactoryIllegalState10008Exception
 import net.mamoe.mirai.qqandroid.network.protocol.packet.chat.GroupInfoImpl
 import net.mamoe.mirai.qqandroid.network.protocol.packet.chat.receive.MessageSvcPbGetMsg
 import net.mamoe.mirai.qqandroid.network.protocol.packet.list.FriendList
@@ -96,14 +99,17 @@ internal class QQAndroidBotNetworkHandler(coroutineContext: CoroutineContext, bo
     private fun startHeartbeatJobOrKill(cancelCause: CancellationException? = null): Job {
         heartbeatJob?.cancel(cancelCause)
 
-        return this@QQAndroidBotNetworkHandler.launch(CoroutineName("Heartbeat")) {
+        return this@QQAndroidBotNetworkHandler.launch(CoroutineName("Heartbeat")) heartBeatJob@{
             while (this.isActive) {
                 delay(bot.configuration.heartbeatPeriodMillis)
                 val failException = doHeartBeat()
                 if (failException != null) {
                     delay(bot.configuration.firstReconnectDelayMillis)
-                    bot.launch { BotOfflineEvent.Dropped(bot, failException).broadcast() }
-                    return@launch
+
+                    bot.launch {
+                        BotOfflineEvent.Dropped(bot, failException).broadcast()
+                    }
+                    return@heartBeatJob
                 }
             }
         }.also { heartbeatJob = it }
@@ -173,8 +179,12 @@ internal class QQAndroidBotNetworkHandler(coroutineContext: CoroutineContext, bo
                     }
                 }
 
-                is WtLogin.Login.LoginPacketResponse.Error ->
+                is WtLogin.Login.LoginPacketResponse.Error -> {
+                    if (response.message.contains("0x9a")) { //Error(title=登录失败, message=请你稍后重试。(0x9a), errorInfo=)
+                        throw RetryLaterException()
+                    }
                     throw WrongPasswordException(response.toString())
+                }
 
                 is WtLogin.Login.LoginPacketResponse.DeviceLockLogin -> {
                     response = WtLogin.Login.SubCommand20(
@@ -236,6 +246,7 @@ internal class QQAndroidBotNetworkHandler(coroutineContext: CoroutineContext, bo
 
             // self info
             data.selfInfo?.run {
+                bot.cachedNick = null
                 bot.selfInfo = this
 //                            bot.remark = remark ?: ""
 //                            bot.sex = sex
@@ -403,7 +414,8 @@ internal class QQAndroidBotNetworkHandler(coroutineContext: CoroutineContext, bo
         logger.info { "Syncing friend message history..." }
         withTimeoutOrNull(30000) {
             launch(CoroutineName("Syncing friend message history")) { syncFromEvent<MessageSvcPbGetMsg.GetMsgSuccess, Unit> { Unit } }
-            MessageSvcPbGetMsg(bot.client, MsgSvc.SyncFlag.START, currentTimeSeconds).sendAndExpect<Packet>()
+            MessageSvcPbGetMsg(bot.client, MsgSvc.SyncFlag.START, null).sendAndExpect<Packet>()
+
         } ?: error("timeout syncing friend message history")
         logger.info { "Syncing friend message history: Success" }
     }
@@ -446,7 +458,14 @@ internal class QQAndroidBotNetworkHandler(coroutineContext: CoroutineContext, bo
         return this.launch(
             start = CoroutineStart.ATOMIC
         ) {
-            input.use { parsePacket(it) }
+            input.use {
+                try {
+                    parsePacket(it)
+                } catch (e: PacketFactoryIllegalState10008Exception) {
+                    logger.warning { "Network force offline: ${e.message}" }
+                    bot.launch { BotOfflineEvent.PacketFactory10008(bot, e).broadcast() }
+                }
+            }
         }
     }
 
@@ -456,6 +475,7 @@ internal class QQAndroidBotNetworkHandler(coroutineContext: CoroutineContext, bo
      *
      * @param input 一个完整的包的内容, 去掉开头的 int 包长度
      */
+    @Throws(ForceOfflineException::class)
     suspend fun parsePacket(input: ByteReadPacket) {
         generifiedParsePacket<Packet>(input)
     }

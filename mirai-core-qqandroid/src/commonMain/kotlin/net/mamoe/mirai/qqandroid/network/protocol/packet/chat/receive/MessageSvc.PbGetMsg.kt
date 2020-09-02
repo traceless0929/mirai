@@ -1,8 +1,8 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
@@ -14,6 +14,7 @@ package net.mamoe.mirai.qqandroid.network.protocol.packet.chat.receive
 import kotlinx.atomicfu.loop
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.core.ByteReadPacket
 import kotlinx.io.core.discardExact
@@ -37,7 +38,6 @@ import net.mamoe.mirai.qqandroid.network.Packet
 import net.mamoe.mirai.qqandroid.network.QQAndroidClient
 import net.mamoe.mirai.qqandroid.network.protocol.data.proto.MsgComm
 import net.mamoe.mirai.qqandroid.network.protocol.data.proto.MsgSvc
-import net.mamoe.mirai.qqandroid.network.protocol.data.proto.SyncCookie
 import net.mamoe.mirai.qqandroid.network.protocol.packet.OutgoingPacket
 import net.mamoe.mirai.qqandroid.network.protocol.packet.OutgoingPacketFactory
 import net.mamoe.mirai.qqandroid.network.protocol.packet.buildOutgoingUniPacket
@@ -45,11 +45,10 @@ import net.mamoe.mirai.qqandroid.network.protocol.packet.chat.GroupInfoImpl
 import net.mamoe.mirai.qqandroid.network.protocol.packet.chat.NewContact
 import net.mamoe.mirai.qqandroid.network.protocol.packet.list.FriendList
 import net.mamoe.mirai.qqandroid.utils.io.serialization.readProtoBuf
-import net.mamoe.mirai.qqandroid.utils.io.serialization.toByteArray
 import net.mamoe.mirai.qqandroid.utils.io.serialization.writeProtoBuf
 import net.mamoe.mirai.qqandroid.utils.read
+import net.mamoe.mirai.qqandroid.utils.toInt
 import net.mamoe.mirai.qqandroid.utils.toUHexString
-import net.mamoe.mirai.utils.currentTimeSeconds
 import net.mamoe.mirai.utils.debug
 import net.mamoe.mirai.utils.warning
 
@@ -58,11 +57,17 @@ import net.mamoe.mirai.utils.warning
  * 获取好友消息和消息记录
  */
 internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Response>("MessageSvc.PbGetMsg") {
+
+
+    private val msgUidQueue = ArrayDeque<Long>()
+    private val msgUidSet = hashSetOf<Long>()
+    private val msgQueueMutex = Mutex()
+
     @Suppress("SpellCheckingInspection")
     operator fun invoke(
         client: QQAndroidClient,
         syncFlag: MsgSvc.SyncFlag = MsgSvc.SyncFlag.START,
-        msgTime: Long //PbPushMsg.msg.msgHead.msgTime
+        syncCookie: ByteArray?, //PbPushMsg.msg.msgHead.msgTime
     ): OutgoingPacket = buildOutgoingUniPacket(
         client
     ) {
@@ -79,8 +84,8 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
                 whisperSessionId = 0,
                 syncFlag = syncFlag,
                 //  serverBuf = from.serverBuf ?: EMPTY_BYTE_ARRAY,
-                syncCookie = client.c2cMessageSync.syncCookie
-                    ?: SyncCookie(time = msgTime).toByteArray(SyncCookie.serializer())//.also { client.c2cMessageSync.syncCookie = it },
+                syncCookie = syncCookie ?: client.c2cMessageSync.syncCookie
+                ?: byteArrayOf()//.also { client.c2cMessageSync.syncCookie = it },
                 // syncFlag = client.c2cMessageSync.syncFlag,
                 //msgCtrlBuf = client.c2cMessageSync.msgCtrlBuf,
                 //pubaccountCookie = client.c2cMessageSync.pubAccountCookie
@@ -88,7 +93,10 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
         )
     }
 
-    open class GetMsgSuccess(delegate: List<Packet>) : Response(MsgSvc.SyncFlag.STOP, delegate), Event,
+    open class GetMsgSuccess(delegate: List<Packet>, syncCookie: ByteArray?) : Response(
+        MsgSvc.SyncFlag.STOP, delegate,
+        syncCookie
+    ), Event,
         Packet.NoLog {
         override fun toString(): String = "MessageSvcPbGetMsg.GetMsgSuccess(messages=<Iterable>))"
     }
@@ -96,7 +104,11 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
     /**
      * 不要直接 expect 这个 class. 它可能还没同步完成
      */
-    open class Response(internal val syncFlagFromServer: MsgSvc.SyncFlag, delegate: List<Packet>) :
+    open class Response(
+        internal val syncFlagFromServer: MsgSvc.SyncFlag,
+        delegate: List<Packet>,
+        val syncCookie: ByteArray?
+    ) :
         AbstractEvent(),
         MultiPacket<Packet>,
         Iterable<Packet> by (delegate) {
@@ -105,11 +117,13 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
             "MessageSvcPbGetMsg.Response(syncFlagFromServer=$syncFlagFromServer, messages=<Iterable>))"
     }
 
-    object EmptyResponse : GetMsgSuccess(emptyList())
+    object EmptyResponse : GetMsgSuccess(emptyList(), null)
 
     private fun MsgComm.Msg.getNewMemberInfo(): MemberInfo {
         return object : MemberInfo {
-            override val nameCard: String get() = ""
+            override val nameCard: String
+                get() = msgHead.authNick.takeIf { it.isNotEmpty() }
+                    ?: msgHead.fromNick
             override val permission: MemberPermission get() = MemberPermission.MEMBER
             override val specialTitle: String get() = ""
             override val muteTimestamp: Int get() = 0
@@ -129,9 +143,23 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
                 .warning { "MessageSvcPushNotify: result != 0, result = ${resp.result}, errorMsg=${resp.errmsg}" }
             return EmptyResponse
         }
+        when (resp.msgRspType) {
+            0 -> {
+                bot.client.c2cMessageSync.syncCookie = resp.syncCookie
+                bot.client.c2cMessageSync.pubAccountCookie = resp.pubAccountCookie
+            }
+            1 -> {
+                bot.client.c2cMessageSync.syncCookie = resp.syncCookie
+            }
+            2 -> {
+                bot.client.c2cMessageSync.pubAccountCookie = resp.pubAccountCookie
 
-        bot.client.c2cMessageSync.syncCookie = resp.syncCookie
-        bot.client.c2cMessageSync.pubAccountCookie = resp.pubAccountCookie
+            }
+        }
+
+//        bot.logger.debug(resp.msgRspType._miraiContentToString())
+//        bot.logger.debug(resp.syncCookie._miraiContentToString())
+
         bot.client.c2cMessageSync.msgCtrlBuf = resp.msgCtrlBuf
 
         if (resp.uinPairMsgs == null) {
@@ -140,27 +168,53 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
 
         val messages = resp.uinPairMsgs.asFlow()
             .filterNot { it.msg == null }
-            .flatMapConcat { it.msg!!.asFlow() }
-            .also {
-                MessageSvcPbDeleteMsg.delete(bot, it)
-            } // 删除消息
+            .flatMapConcat {
+                it.msg!!.asFlow()
+                    .filter { msg: MsgComm.Msg -> msg.msgHead.msgTime > it.lastReadTime.toLong() and 4294967295L }
+            }.also {
+                MessageSvcPbDeleteMsg.delete(bot, it) // 删除消息
+            }
             .mapNotNull<MsgComm.Msg, Packet> { msg ->
 
-                when (msg.msgHead.msgType) {
-                    33 -> bot.groupListModifyLock.withLock { // 邀请入群
-                        val group = bot.getGroupByUinOrNull(msg.msgHead.fromUin)
-                        if (msg.msgHead.authUin == bot.id) {
-                            if (group != null) {
-                                return@mapNotNull null
-                            }
-                            // 新群
+                msgQueueMutex.lock()
+                val msgUid = msg.msgHead.msgUid
+                if (msgUidSet.size > 50) {
+                    msgUidSet.remove(msgUidQueue.removeFirst())
+                }
+                if (!msgUidSet.add(msgUid)) {
+                    msgQueueMutex.unlock()
+                    return@mapNotNull null
+                }
+                msgQueueMutex.unlock()
+                msgUidQueue.addLast(msgUid)
 
-                            val newGroup = bot.getNewGroup(Group.calculateGroupCodeByGroupUin(msg.msgHead.fromUin))
-                                ?: return@mapNotNull null
-                            bot.groups.delegate.addLast(newGroup)
-                            return@mapNotNull BotJoinGroupEvent.Active(newGroup)
+                suspend fun createGroupForBot(groupUin: Long): Group? {
+                    val group = bot.getGroupByUinOrNull(groupUin)
+                    if (group != null) {
+                        return null
+                    }
+
+                    return bot.getNewGroup(Group.calculateGroupCodeByGroupUin(groupUin))?.apply {
+                        bot.groups.delegate.addLast(this)
+                    }
+                }
+
+                when (msg.msgHead.msgType) {
+                    33 -> bot.groupListModifyLock.withLock {
+
+                        if (msg.msgHead.authUin == bot.id) {
+                            // 邀请入群
+                            return@mapNotNull createGroupForBot(msg.msgHead.fromUin)?.let {
+                                // package: 27 0B 60 E7 01 CA CC 69 8B 83 44 71 47 90 06 B9 DC C0 ED D4 B1 00 30 33 44 30 42 38 46 30 39 37 32 38 35 43 34 31 38 30 33 36 41 34 36 31 36 31 35 32 37 38 46 46 43 30 41 38 30 36 30 36 45 38 31 43 39 41 34 38 37
+                                // package: groupUin + 01 CA CC 69 8B 83 + invitorUin + length(06) + string + magicKey
+                                val invitorUin = msg.msgBody.msgContent.sliceArray(10..13).toInt().toLong()
+                                BotJoinGroupEvent.Invite(it[invitorUin])
+                            }
                         } else {
-                            group ?: return@mapNotNull null
+
+                            // 成员申请入群
+                            val group = bot.getGroupByUinOrNull(msg.msgHead.fromUin)
+                                ?: return@mapNotNull null
 
                             // 主动入群, 直接加入: msgContent=27 0B 60 E7 01 76 E4 B8 DD 82 3E 03 3F A2 06 B4 B4 BD A8 D5 DF 00 30 42 39 41 30 33 45 38 34 30 39 34 42 46 30 45 32 45 38 42 31 43 43 41 34 32 42 38 42 44 42 35 34 44 42 31 44 32 32 30 46 30 38 39 46 46 35 41 38
                             // 主动直接加入                  27 0B 60 E7 01 76 E4 B8 DD 82 3E 03 3F A2 06 B4 B4 BD A8 D5 DF 00 30 33 30 45 38 42 31 33 46 41 41 31 33 46 38 31 35 34 41 38 33 32 37 31 43 34 34 38 35 33 35 46 45 31 38 32 43 39 42 43 46 46 32 44 39 39 46 41 37
@@ -190,6 +244,24 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
                     34 -> { // 与 33 重复
                         return@mapNotNull null
                     }
+
+                    38 -> bot.groupListModifyLock.withLock { // 建群
+                        return@mapNotNull createGroupForBot(msg.msgHead.fromUin)
+                            ?.let { BotJoinGroupEvent.Active(it) }
+                    }
+
+                    85 -> bot.groupListModifyLock.withLock { // 其他客户端入群
+
+                        // msg.msgHead.authUin: 处理人
+
+                        return@mapNotNull if (msg.msgHead.toUin == bot.id) {
+                            createGroupForBot(msg.msgHead.fromUin)
+                                ?.let { BotJoinGroupEvent.Active(it) }
+                        } else {
+                            null
+                        }
+                    }
+
                     /*
                     34 -> { // 主动入群
 
@@ -237,7 +309,6 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
                     */
 
                     166 -> {
-
                         if (msg.msgHead.fromUin == bot.id) {
                             loop@ while (true) {
                                 val instance = bot.client.getFriendSeq()
@@ -256,15 +327,13 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
                             return@mapNotNull null
                         }
 
-                        friend.lastMessageSequence.loop { instant ->
-                            if (msg.msgHead.msgSeq > instant) {
-                                if (friend.lastMessageSequence.compareAndSet(instant, msg.msgHead.msgSeq)) {
-                                    return@mapNotNull FriendMessageEvent(
-                                        friend,
-                                        msg.toMessageChain(bot, groupIdOrZero = 0, onlineSource = true),
-                                        msg.msgHead.msgTime
-                                    )
-                                }
+                        friend.lastMessageSequence.loop {
+                            if (friend.lastMessageSequence.compareAndSet(it, msg.msgHead.msgSeq)) {
+                                return@mapNotNull FriendMessageEvent(
+                                    friend,
+                                    msg.toMessageChain(bot, groupIdOrZero = 0, onlineSource = true),
+                                    msg.msgHead.msgTime
+                                )
                             } else return@mapNotNull null
                         }
                     }
@@ -330,27 +399,37 @@ internal object MessageSvcPbGetMsg : OutgoingPacketFactory<MessageSvcPbGetMsg.Re
                     }
                 }
             }
-
         val list: List<Packet> = messages.toList()
         if (resp.syncFlag == MsgSvc.SyncFlag.STOP) {
-            return GetMsgSuccess(list)
+            return GetMsgSuccess(list, resp.syncCookie)
         }
-        return Response(resp.syncFlag, list)
+        return Response(resp.syncFlag, list, resp.syncCookie)
     }
 
     override suspend fun QQAndroidBot.handle(packet: Response) {
         when (packet.syncFlagFromServer) {
-            MsgSvc.SyncFlag.STOP -> return
+            MsgSvc.SyncFlag.STOP -> {
+
+            }
+
             MsgSvc.SyncFlag.START -> {
                 network.run {
-                    MessageSvcPbGetMsg(client, MsgSvc.SyncFlag.CONTINUE, currentTimeSeconds).sendAndExpect<Packet>()
+                    MessageSvcPbGetMsg(
+                        client,
+                        MsgSvc.SyncFlag.CONTINUE,
+                        bot.client.c2cMessageSync.syncCookie
+                    ).sendAndExpect<Packet>()
                 }
                 return
             }
 
             MsgSvc.SyncFlag.CONTINUE -> {
                 network.run {
-                    MessageSvcPbGetMsg(client, MsgSvc.SyncFlag.CONTINUE, currentTimeSeconds).sendAndExpect<Packet>()
+                    MessageSvcPbGetMsg(
+                        client,
+                        MsgSvc.SyncFlag.CONTINUE,
+                        bot.client.c2cMessageSync.syncCookie
+                    ).sendAndExpect<Packet>()
                 }
                 return
             }

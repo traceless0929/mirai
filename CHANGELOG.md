@@ -1,8 +1,100 @@
 # Version 1.x
 
+## `1.2.2`  2020/8/22
+- 修复依赖冲突问题 (#523)
+
+## `1.2.1`  2020/8/19
+- 修复在 Java 调用 `group.uploadImage` 时编译出错的问题 (#511)
+- 为 `group.uploadVoice` 添加 Java 方法 (需要 [kotlin-jvm-blocking-bridge](https://github.com/mamoe/kotlin-jvm-blocking-bridge)) (#512)
+- 更新 ktor 到 1.4.0
+
+## `1.2.0`  2020/8/19
+
+### 新特性
+- 初步语音支持: `Group.uploadVoice`, 支持 silk 或 amr 格式.  
+   **注意**: 现阶段语音实现仅为临时方案, 在将来 (`2.0.0`) 一定会变动. 使用时请评估可能带来的不兼容性.
+
+- 新增将日志转换为 log4j, JDK Logger, SLF4J 等框架的方法: `LoggerAdapters` (#498 by [@Karlatemp](https://github.com/Karlatemp))
+- 支持解析好友输入状态: `FriendInputStatusChangedEvent` (by [@sandtechnology](https://github.com/sandtechnology))
+- 支持解析好友昵称改变事件: `FriendNickChangedEvent` (#507 by [@Karlatemp](https://github.com/Karlatemp))
+- `nextEvent` 和 `nextEventOrNull` 添加 `filter`
+- 将 mirai 码相关内容从 mirai-serialization 集成到 mirai-core
+- `GroupMessageEvent` 现在实现接口 `GroupEvent`
+- `FriendMessageEvent` 现在实现接口 `FriendEvent` (#444)
+
+### 依赖更新
+- 更新 Kotlin 版本到 [`1.4.0`](https://blog.jetbrains.com/zh-hans/kotlin/2020/08/kotlin-1-4-released-with-a-focus-on-quality-and-performance-zh/)
+- 更新 kotlinx-coroutines-core 到 `1.3.9`
+- 使用者也需要更新到 `1.4.0`, 至少更新编译器 (Maven 和 Gradle 插件)
+- **更新 kotlinx-serialization 到 `1.0.0-RC`**: kotlinx-serialization 在此版本做了较大的不兼容改动.
+
+### API 弃用
+- `String.toMessage`: 为避免和 mirai code 产生混乱.
+- `URL.toExternalImage`
+- `Input.toExternalImage`
+
+### 优化和修复
+- 显式 API
+  - mirai 的所有公开 API 均已经显式加上 `public` 修饰符, 遵循 [Koltin Explicit API mode](https://kotlinlang.org/docs/reference/whatsnew14.html#explicit-api-mode-for-library-authors) 规范. 如:
+    ```kotlin
+         data class BotOnlineEvent internal constructor(
+            override val bot: Bot
+        ) : BotActiveEvent, AbstractEvent()
+    ```
+  - *调整了一些不应该公开的 API 为 `internal`, 这些调整在绝大多数情况下不影响现有代码*
+- 修复群权限判断失败的问题 (#389)
+- 修复 `syncFromEvent` 文档错误 (#427)
+- 新增 `BotConfiguration.loadDeviceInfoJson(String)` (#450)
+- 修复成员进群后第一次发言触发改名事件的问题 (#475 by [@cxy654849388](https://github.com/cxy654849388)
+- 修复 `group.quit` 未正确执行的问题 (#472, #477 by [@Mr4s](https://github.com/Mrs4s)
+- 修复初始化时 syncCookie 同步问题
+- 修复 Network Protocol: java.lang.IllegalStateException: returnCode = -10008 (#470)
+- 修复 `Member.isMuted`
+- 修复 `Method.registerEvent` 相关问题 (#495 by @sandtechnology, #499 by @Karlatemp)
+- 修复 Android 手表协议无法监听撤回事件的问题 (#448)
+- 改进好友消息同步过程
+
+## `1.1.3`  2020/7/17
+- 修复 ListenerHost Java 兼容性问题  (#443, #446 by [@Karlatemp](https://github.com/Karlatemp))
+
+## `1.1.2`  2020/7/16
+- 修复 JvmMethodEvents `T.registerEvents` 注册时错误判断 `@NotNull` 注解的问题 (#436)
+
+## `1.1.1`  2020/7/11
+- 修复最后一个 mirai 码之后的消息无法解析的问题 (#431 [@cxy654849388](https://github.com/cxy654849388))
+
+## `1.1.0`  2020/7/9
+- 支持 Android 手表协议 (`BotConfiguration.MiraiProtocol.ANDROID_WATCH`)
+- `EventHandler` 现在支持 `Nothing` 类型.
+- 修复无需同意直接进群时，在加载新群信息完成前收到消息过早处理的问题 (#370)
+- 修复在某些情况下，管理员邀请群Bot加群会被误判为群成员申请加群的问题 (#402 by [@kenvix](https://github.com/kenvix))
+- 修复从其他客户端加群时未同步的问题 (#404, #410)
+- 修复 `ConfigPushSvc.PushReq` 解析失败的问题 (#417)
+- 修复 `_lowLevelGetGroupActiveData`
+- 修复 `SimpleListenerHost.coroutineScope` 潜在的 Job 被覆盖的问题
+
+## `1.0.4` 2020/7/2
+- 修复上传图片失败时内存泄露的问题 (#385)
+- 修复大量图片同时上传时出错的问题 (#387)
+- 修复在一些情况下 BotOfflineEvent 没有正常处理而无法继续接收消息的问题 (#376)
+- 修复 Bot 在某个群 T 出某个人导致 Bot 终止的问题 (#372)
+- 修复 `@PlannedRemoval` 的文档
+
+## `1.1-EA2` 2020/7/2
+
+- 添加 `BotConfiguration.json`, 作为序列化时使用的 Json format, 修复潜在的因 kotlinx.serialization 进行不兼容更新而导致的不兼容.
+
+**不兼容变更**:
+- Image.imageId 后缀由 `.mirai` 变为图片文件实际类型, 如 `.png`, `.jpg`. 兼容原 `.mirai` 后缀.
+
+**修复**:
+- ([1.0.4](https://github.com/mamoe/mirai/releases/tag/1.0.4) 中修复的问题)
+- ([1.0.3](https://github.com/mamoe/mirai/releases/tag/1.0.3) 中修复的问题)
+
+## `1.0.3` 2020/6/29
+- 修复 friendlist.GetTroopListReqV2：java.lang.IllegalStateException: type mismatch 10 (#405)
+
 ## `1.1-EA` 2020/6/16
-**1.1.0 Early Access** / **1.1.0 预览版**  
-**此版本新增的 API 可能不稳定, 且可能在下一个版本中删除.**
 
 **主要**:
 - 添加实验性 `CodableMessage` 作为支持 mirai 码的 `Message` 的接口.

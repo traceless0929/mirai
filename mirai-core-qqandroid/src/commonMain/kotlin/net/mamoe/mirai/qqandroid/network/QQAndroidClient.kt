@@ -1,8 +1,8 @@
 /*
- * Copyright 2020 Mamoe Technologies and contributors.
+ * Copyright 2019-2020 Mamoe Technologies and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license that can be found through the following link.
+ * Use of this source code is governed by the GNU AFFERO GENERAL PUBLIC LICENSE version 3 license that can be found via the following link.
  *
  * https://github.com/mamoe/mirai/blob/master/LICENSE
  */
@@ -11,6 +11,7 @@
 
 package net.mamoe.mirai.qqandroid.network
 
+import kotlinx.atomicfu.AtomicBoolean
 import kotlinx.atomicfu.AtomicInt
 import kotlinx.atomicfu.atomic
 import kotlinx.io.core.*
@@ -27,6 +28,7 @@ import net.mamoe.mirai.qqandroid.utils.*
 import net.mamoe.mirai.qqandroid.utils.cryptor.ECDH
 import net.mamoe.mirai.qqandroid.utils.cryptor.TEA
 import net.mamoe.mirai.utils.*
+import kotlin.jvm.Volatile
 import kotlin.random.Random
 
 internal val DeviceInfo.guid: ByteArray get() = generateGuid(androidId, macAddress)
@@ -44,13 +46,13 @@ private fun generateGuid(androidId: ByteArray, macAddress: ByteArray): ByteArray
 internal fun getRandomByteArray(length: Int): ByteArray = ByteArray(length) { Random.nextInt(0, 255).toByte() }
 
 internal object DefaultServerList : Set<Pair<String, Int>> by setOf(
+    "msfwifi.3g.qq.com" to 8080,
     "42.81.169.46" to 8080,
     "42.81.172.81" to 80,
     "114.221.148.59" to 14000,
     "42.81.172.147" to 443,
     "125.94.60.146" to 80,
     "114.221.144.215" to 80,
-    "msfwifi.3g.qq.com" to 8080,
     "42.81.172.22" to 80
 )
 
@@ -131,7 +133,7 @@ internal open class QQAndroidClient(
             throw NoServerAvailableException(null)
         }
         retryCatching(bot.client.serverList.size, except = LoginFailedException::class) {
-            val pair = bot.client.serverList.random()
+            val pair = bot.client.serverList[0]
             kotlin.runCatching {
                 block(pair.first, pair.second)
                 return@retryCatching
@@ -204,6 +206,9 @@ internal open class QQAndroidClient(
     val protocolVersion: Short = 8001
 
     class C2cMessageSyncData {
+        val firstNotify: AtomicBoolean = atomic(true)
+
+        @Volatile
         var syncCookie: ByteArray? = null
         var pubAccountCookie = EMPTY_BYTE_ARRAY
         var msgCtrlBuf: ByteArray = EMPTY_BYTE_ARRAY
