@@ -27,6 +27,7 @@ import net.mamoe.mirai.event.subscribeAlways
 import net.mamoe.mirai.network.ForceOfflineException
 import net.mamoe.mirai.network.LoginFailedException
 import net.mamoe.mirai.qqandroid.network.BotNetworkHandler
+import net.mamoe.mirai.qqandroid.network.DefaultServerList
 import net.mamoe.mirai.qqandroid.network.closeAndJoin
 import net.mamoe.mirai.supervisorJob
 import net.mamoe.mirai.utils.*
@@ -89,7 +90,13 @@ internal abstract class BotImpl<N : BotNetworkHandler> constructor(
                         // normally closed
                         return@subscribeAlways
                     }
-                    bot.logger.info { "Connection dropped by server or lost, retrying login" }
+                    bot.logger.info { "Connection lost, retrying login" }
+
+                    bot.asQQAndroidBot().client.run {
+                        if (serverList.isEmpty()) {
+                            serverList.addAll(DefaultServerList)
+                        } else serverList.removeAt(0)
+                    }
 
                     var failed = false
                     val time = measureTime {
